@@ -31,7 +31,7 @@ async def run_forecast_pipeline(
         await _run(product_id, forecast_id, horizon_days, model_type,
                    include_weather, include_trends, supabase)
     except Exception as exc:
-        supabase.table("forecasts").update({"status": "error"}).eq("id", forecast_id).execute()
+        supabase.table("forecasts").update({"status": "failed"}).eq("id", forecast_id).execute()
         raise exc
 
 
@@ -235,7 +235,7 @@ async def _run(product_id, forecast_id, horizon_days, model_type,
 
     # ── 14. Update forecast record ───────────────────────────────────────────
     update_data = {
-        "status": "done",
+        "status": "completed",
         "alpha": round(float(alpha), 4),
         "mae": round(metrics["mae"], 4),
         "rmse": round(metrics["rmse"], 4),
