@@ -2,7 +2,7 @@ import { useEffect, useState, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import { Layout } from '../components/layout/Layout';
 import { Header } from '../components/layout/Header';
-import { LoadingSpinner } from '../components/ui/LoadingSpinner';
+import { Skeleton } from '../components/ui/Skeleton';
 import { useProducts } from '../hooks/useProducts';
 import { forecastsApi } from '../api/forecasts';
 import type { Forecast } from '../types';
@@ -71,7 +71,15 @@ export function DashboardPage() {
     return (
       <Layout>
         <Header title="Dashboard" />
-        <div className="flex items-center justify-center h-64"><LoadingSpinner size="lg" /></div>
+        <div className="p-6 space-y-6">
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+            {[...Array(4)].map((_, i) => <Skeleton key={i} className="h-24" />)}
+          </div>
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            <Skeleton className="lg:col-span-2 h-64" />
+            <Skeleton className="h-64" />
+          </div>
+        </div>
       </Layout>
     );
   }

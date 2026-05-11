@@ -27,3 +27,23 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(b
     if not result.data:
         raise credentials_exception
     return result.data
+
+
+def get_user_product(product_id: str, user_id: str, supabase) -> dict:
+    """Fetch a product only if it belongs to the given user. Raises 404 otherwise."""
+    result = supabase.table("products").select("*").eq("id", product_id).eq("user_id", user_id).execute()
+    if not result.data:
+        raise HTTPException(status_code=404, detail="Product not found")
+    return result.data[0]
+
+
+def get_user_forecast(forecast_id: str, user_id: str, supabase) -> dict:
+    """Fetch a forecast only if its product belongs to the given user. Raises 404 otherwise."""
+    forecast_result = supabase.table("forecasts").select("*").eq("id", forecast_id).execute()
+    if not forecast_result.data:
+        raise HTTPException(status_code=404, detail="Forecast not found")
+    forecast = forecast_result.data[0]
+    product_result = supabase.table("products").select("id").eq("id", forecast["product_id"]).eq("user_id", user_id).execute()
+    if not product_result.data:
+        raise HTTPException(status_code=404, detail="Forecast not found")
+    return forecast

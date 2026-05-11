@@ -2,6 +2,8 @@ import { useState, useRef, useCallback, useEffect } from 'react';
 import { Layout } from '../components/layout/Layout';
 import { Header } from '../components/layout/Header';
 import { LoadingSpinner } from '../components/ui/LoadingSpinner';
+import { Skeleton } from '../components/ui/Skeleton';
+import { useToast } from '../context/ToastContext';
 import { useProducts } from '../hooks/useProducts';
 import { productsApi } from '../api/products';
 import { salesApi } from '../api/sales';
@@ -26,6 +28,7 @@ const EMPTY_FORM: ProductForm = { name: '', category: '', search_keyword: '', la
 
 export function UploadPage() {
   const { products, loading: productsLoading, refetch } = useProducts();
+  const toast = useToast();
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [form, setForm] = useState<ProductForm>(EMPTY_FORM);
@@ -84,8 +87,10 @@ export function UploadPage() {
       setSelectedProduct(newProduct);
       setShowCreateForm(false);
       setForm(EMPTY_FORM);
+      toast.success(`Product "${newProduct.name}" created.`);
     } catch {
       setCreateError('Failed to create product. Please try again.');
+      toast.error('Failed to create product.');
     } finally {
       setCreating(false);
     }
@@ -103,8 +108,9 @@ export function UploadPage() {
         setUploadState('idle');
       }
       await refetch();
+      toast.success(`"${product.name}" deleted.`);
     } catch {
-      // silent
+      toast.error('Failed to delete product.');
     } finally {
       setDeletingId(null);
     }
@@ -125,10 +131,13 @@ export function UploadPage() {
       setUploadResult(result);
       setUploadState('success');
       await fetchStats(selectedProduct.id);
+      toast.success(`Uploaded ${result.inserted} rows successfully.`);
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
-      setUploadError(msg ?? 'Upload failed. Check the file format and try again.');
+      const errMsg = msg ?? 'Upload failed. Check the file format and try again.';
+      setUploadError(errMsg);
       setUploadState('error');
+      toast.error(errMsg);
     }
   }, [selectedProduct, fetchStats]);
 
@@ -159,10 +168,10 @@ export function UploadPage() {
   return (
     <Layout>
       <Header title="Upload Data" />
-      <div className="flex h-[calc(100vh-56px)]">
+      <div className="flex flex-col md:flex-row md:h-[calc(100vh-56px)]">
 
         {/* Left panel — Product management */}
-        <div className="w-72 flex-shrink-0 border-r border-gray-200 bg-gray-50 flex flex-col">
+        <div className="w-full md:w-72 md:flex-shrink-0 border-b md:border-b-0 md:border-r border-gray-200 bg-gray-50 flex flex-col max-h-60 md:max-h-none">
           <div className="px-4 py-4 border-b border-gray-200 flex items-center justify-between">
             <span className="text-sm font-semibold text-gray-900">Products</span>
             <button
@@ -260,7 +269,9 @@ export function UploadPage() {
           {/* Product list */}
           <div className="flex-1 overflow-y-auto py-2">
             {productsLoading ? (
-              <div className="flex justify-center py-8"><LoadingSpinner /></div>
+              <div className="px-3 py-2 space-y-2">
+                {[...Array(3)].map((_, i) => <Skeleton key={i} className="h-14 w-full" />)}
+              </div>
             ) : products.length === 0 ? (
               <div className="px-4 py-8 text-center">
                 <Package size={28} className="mx-auto text-gray-300 mb-2" />
@@ -314,10 +325,10 @@ export function UploadPage() {
               </div>
             </div>
           ) : (
-            <div className="p-6 space-y-6">
+            <div className="p-4 md:p-6 space-y-5 md:space-y-6">
 
               {/* Product header */}
-              <div className="flex items-center justify-between">
+              <div className="flex items-start flex-wrap justify-between gap-2">
                 <div>
                   <h2 className="text-base font-semibold text-gray-900">{selectedProduct.name}</h2>
                   <p className="text-sm text-gray-400">{selectedProduct.category}</p>
@@ -338,7 +349,7 @@ export function UploadPage() {
                 onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
                 onDragLeave={() => setIsDragging(false)}
                 onDrop={onDrop}
-                className={`relative rounded-xl border-2 border-dashed p-10 text-center cursor-pointer transition-all ${
+                className={`relative rounded-xl border-2 border-dashed p-6 md:p-10 text-center cursor-pointer transition-all ${
                   isDragging
                     ? 'border-indigo-400 bg-indigo-50'
                     : uploadState === 'uploading'
@@ -414,7 +425,9 @@ export function UploadPage() {
 
               {/* Dataset stats */}
               {loadingStats ? (
-                <div className="flex justify-center py-6"><LoadingSpinner /></div>
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 py-2">
+                  {[...Array(6)].map((_, i) => <Skeleton key={i} className="h-16" />)}
+                </div>
               ) : stats ? (
                 <div className="space-y-4">
                   <div className="flex items-center gap-2">

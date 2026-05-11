@@ -1,7 +1,7 @@
 from fastapi import APIRouter, HTTPException, BackgroundTasks, Depends
 from app.db.models import ForecastRequest, ForecastOut, ForecastValueOut, SHAPValueOut
 from app.db.supabase import get_supabase
-from app.api.deps import get_current_user
+from app.api.deps import get_current_user, get_user_product, get_user_forecast
 from typing import List
 import uuid
 
@@ -16,6 +16,8 @@ async def run_forecast(
     current_user: dict = Depends(get_current_user)
 ):
     supabase = get_supabase()
+    get_user_product(product_id, current_user["id"], supabase)
+
     forecast_id = str(uuid.uuid4())
     supabase.table("forecasts").insert({
         "id": forecast_id,
@@ -42,6 +44,7 @@ async def run_forecast(
 @router.get("/{product_id}", response_model=List[ForecastOut])
 def get_forecasts(product_id: str, current_user: dict = Depends(get_current_user)):
     supabase = get_supabase()
+    get_user_product(product_id, current_user["id"], supabase)
     result = supabase.table("forecasts").select("*").eq("product_id", product_id).order("created_at", desc=True).execute()
     return result.data
 
@@ -49,15 +52,14 @@ def get_forecasts(product_id: str, current_user: dict = Depends(get_current_user
 @router.get("/{forecast_id}/status")
 def get_forecast_status(forecast_id: str, current_user: dict = Depends(get_current_user)):
     supabase = get_supabase()
-    result = supabase.table("forecasts").select("id,status,mae,rmse,mape,r2").eq("id", forecast_id).execute()
-    if not result.data:
-        raise HTTPException(status_code=404, detail="Forecast not found")
-    return result.data[0]
+    forecast = get_user_forecast(forecast_id, current_user["id"], supabase)
+    return {k: forecast[k] for k in ("id", "status", "mae", "rmse", "mape", "r2") if k in forecast}
 
 
 @router.get("/{forecast_id}/values", response_model=List[ForecastValueOut])
 def get_forecast_values(forecast_id: str, current_user: dict = Depends(get_current_user)):
     supabase = get_supabase()
+    get_user_forecast(forecast_id, current_user["id"], supabase)
     result = supabase.table("forecast_values").select("*").eq("forecast_id", forecast_id).order("date").execute()
     return result.data
 
@@ -65,6 +67,7 @@ def get_forecast_values(forecast_id: str, current_user: dict = Depends(get_curre
 @router.get("/{forecast_id}/shap", response_model=List[SHAPValueOut])
 def get_shap_values(forecast_id: str, current_user: dict = Depends(get_current_user)):
     supabase = get_supabase()
+    get_user_forecast(forecast_id, current_user["id"], supabase)
     result = supabase.table("shap_values").select("*").eq("forecast_id", forecast_id).order("mean_abs_shap", desc=True).execute()
     return result.data
 
@@ -73,45 +76,35 @@ def get_shap_values(forecast_id: str, current_user: dict = Depends(get_current_u
 def get_recommendations(forecast_id: str, current_user: dict = Depends(get_current_user)):
     from app.db.models import RecommendationResponse
     import pandas as pd
-    
+
     supabase = get_supabase()
-    
-    # Get forecast metadata
-    forecast_result = supabase.table("forecasts").select("*").eq("id", forecast_id).execute()
-    if not forecast_result.data:
-        raise HTTPException(status_code=404, detail="Forecast not found")
-    forecast = forecast_result.data[0]
-    
-    # Get forecast values
+    forecast = get_user_forecast(forecast_id, current_user["id"], supabase)
+
     values_result = supabase.table("forecast_values").select("*").eq("forecast_id", forecast_id).order("date").execute()
     if not values_result.data:
         raise HTTPException(status_code=404, detail="Forecast values not found")
-    
+
     forecast_df = pd.DataFrame(values_result.data)
     forecast_df["date"] = pd.to_datetime(forecast_df["date"])
-    
-    # Get historical sales for comparison
+
     product_id = forecast["product_id"]
     sales_result = supabase.table("sales").select("date,quantity").eq("product_id", product_id).order("date", desc=True).limit(7).execute()
-    
-    # Calculate trend
+
     next_week_avg = forecast_df.head(7)["predicted_quantity"].mean()
     if sales_result.data and len(sales_result.data) > 0:
         prev_week_avg = pd.DataFrame(sales_result.data)["quantity"].mean()
     else:
         prev_week_avg = next_week_avg
-    
+
     trend_percent = ((next_week_avg - prev_week_avg) / prev_week_avg * 100) if prev_week_avg > 0 else 0.0
-    
-    # Determine trend direction
+
     if trend_percent > 5:
         trend_direction = "growing"
     elif trend_percent < -5:
         trend_direction = "declining"
     else:
         trend_direction = "stable"
-    
-    # Determine risk level based on MAPE
+
     mape = forecast.get("mape", 0.0) or 0.0
     if mape < 10:
         risk_level = "low"
@@ -119,8 +112,7 @@ def get_recommendations(forecast_id: str, current_user: dict = Depends(get_curre
         risk_level = "medium"
     else:
         risk_level = "high"
-    
-    # Generate recommendations
+
     recommendations = []
     if trend_direction == "growing" and risk_level == "low":
         recommendations = [
@@ -157,7 +149,7 @@ def get_recommendations(forecast_id: str, current_user: dict = Depends(get_curre
             "Попит стабільний — підтримуйте поточний рівень замовлень",
             "Рекомендується моніторинг ринкових змін",
         ]
-    
+
     return RecommendationResponse(
         forecast_id=forecast_id,
         trend_direction=trend_direction,
@@ -172,15 +164,14 @@ def export_forecast(forecast_id: str, current_user: dict = Depends(get_current_u
     from fastapi.responses import StreamingResponse
     import pandas as pd
     import io
-    
+
     supabase = get_supabase()
-    
-    # Get forecast values
+    get_user_forecast(forecast_id, current_user["id"], supabase)
+
     values_result = supabase.table("forecast_values").select("*").eq("forecast_id", forecast_id).order("date").execute()
     if not values_result.data:
         raise HTTPException(status_code=404, detail="Forecast not found")
-    
-    # Create DataFrame
+
     df = pd.DataFrame(values_result.data)
     df = df[["date", "predicted_quantity", "lower_bound", "upper_bound"]]
     df = df.rename(columns={
@@ -188,20 +179,15 @@ def export_forecast(forecast_id: str, current_user: dict = Depends(get_current_u
         "lower_bound": "lower",
         "upper_bound": "upper"
     })
-    
-    # Add empty columns for actual, prophet, lstm (will be filled by frontend or future logic)
     df["actual"] = None
     df["prophet"] = None
     df["lstm"] = None
-    
-    # Reorder columns
     df = df[["date", "actual", "prophet", "lstm", "ensemble", "lower", "upper"]]
-    
-    # Convert to CSV
+
     stream = io.StringIO()
     df.to_csv(stream, index=False)
     stream.seek(0)
-    
+
     return StreamingResponse(
         iter([stream.getvalue()]),
         media_type="text/csv",
@@ -212,20 +198,17 @@ def export_forecast(forecast_id: str, current_user: dict = Depends(get_current_u
 @router.get("/{forecast_id}/components")
 def get_components(forecast_id: str, current_user: dict = Depends(get_current_user)):
     from app.db.models import ComponentsResponse
-    
+
     supabase = get_supabase()
-    
-    # Get forecast with prophet_components
+    get_user_forecast(forecast_id, current_user["id"], supabase)
+
     result = supabase.table("forecasts").select("prophet_components").eq("id", forecast_id).execute()
-    if not result.data:
-        raise HTTPException(status_code=404, detail="Forecast not found")
-    
     forecast = result.data[0]
     components = forecast.get("prophet_components")
-    
+
     if not components:
         raise HTTPException(status_code=404, detail="Prophet components not available for this forecast")
-    
+
     return ComponentsResponse(
         forecast_id=forecast_id,
         dates=components.get("dates", []),
@@ -239,28 +222,18 @@ def get_components(forecast_id: str, current_user: dict = Depends(get_current_us
 @router.get("/{forecast_id}/comparison")
 def get_comparison(forecast_id: str, current_user: dict = Depends(get_current_user)):
     from app.db.models import ComparisonResponse, ModelMetrics
-    
+
     supabase = get_supabase()
-    
-    # Get forecast with all metrics
-    result = supabase.table("forecasts").select("*").eq("id", forecast_id).execute()
-    if not result.data:
-        raise HTTPException(status_code=404, detail="Forecast not found")
-    
-    forecast = result.data[0]
-    
-    # Build models dict
+    forecast = get_user_forecast(forecast_id, current_user["id"], supabase)
+
     models = {}
-    
-    # Ensemble metrics (always present)
     models["ensemble"] = ModelMetrics(
         mae=forecast.get("mae", 0.0) or 0.0,
         rmse=forecast.get("rmse", 0.0) or 0.0,
         mape=forecast.get("mape", 0.0) or 0.0,
         r2=forecast.get("r2", 0.0) or 0.0,
     )
-    
-    # Prophet metrics (if available)
+
     prophet_metrics = forecast.get("prophet_metrics")
     if prophet_metrics:
         models["prophet"] = ModelMetrics(
@@ -269,8 +242,7 @@ def get_comparison(forecast_id: str, current_user: dict = Depends(get_current_us
             mape=prophet_metrics.get("mape", 0.0),
             r2=prophet_metrics.get("r2", 0.0),
         )
-    
-    # LSTM metrics (if available)
+
     lstm_metrics = forecast.get("lstm_metrics")
     if lstm_metrics:
         models["lstm"] = ModelMetrics(
@@ -279,7 +251,7 @@ def get_comparison(forecast_id: str, current_user: dict = Depends(get_current_us
             mape=lstm_metrics.get("mape", 0.0),
             r2=lstm_metrics.get("r2", 0.0),
         )
-    
+
     return ComparisonResponse(
         forecast_id=forecast_id,
         product_id=forecast["product_id"],

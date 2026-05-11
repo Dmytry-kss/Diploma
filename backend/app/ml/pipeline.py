@@ -1,10 +1,13 @@
 import uuid
 import asyncio
+import logging
 from functools import partial
 import numpy as np
 import pandas as pd
 from datetime import date, timedelta
 from supabase import Client
+
+logger = logging.getLogger(__name__)
 
 from app.services.open_meteo import fetch_weather
 from app.services.google_trends import fetch_trends
@@ -74,17 +77,26 @@ async def _run(product_id, forecast_id, horizon_days, model_type,
     today_str = date.today().isoformat()
     future_end = (date.today() + timedelta(days=horizon_days)).isoformat()
 
-    # ── 4. External data ─────────────────────────────────────────────────────
+    # ── 4. External data — fetch from API, fallback to cache ─────────────────
     weather_df = pd.DataFrame(columns=["date", "temperature", "precipitation", "uv_index"])
     if include_weather:
-        weather_df = await fetch_weather(lat, lon, hist_start, future_end)
+        try:
+            weather_df = await fetch_weather(lat, lon, hist_start, future_end)
+        except Exception:
+            weather_df, _ = _load_cached_external_features(supabase, product_id, hist_start, future_end)
 
     trends_df = pd.DataFrame(columns=["date", "search_interest"])
     if include_trends and keyword:
-        loop = asyncio.get_event_loop()
-        trends_df = await loop.run_in_executor(
-            None, partial(fetch_trends, keyword, hist_start, today_str)
-        )
+        try:
+            loop = asyncio.get_event_loop()
+            trends_df = await loop.run_in_executor(
+                None, partial(fetch_trends, keyword, hist_start, today_str)
+            )
+        except Exception:
+            _, trends_df = _load_cached_external_features(supabase, product_id, hist_start, today_str)
+
+    # Persist fetched data to cache (upsert)
+    _save_external_features(supabase, product_id, weather_df, trends_df)
 
     # ── 5. Historical feature matrix ─────────────────────────────────────────
     hist_weather = (
@@ -264,6 +276,85 @@ async def _run(product_id, forecast_id, horizon_days, model_type,
         update_data["prophet_components"] = prophet_components
     
     supabase.table("forecasts").update(update_data).eq("id", forecast_id).execute()
+
+
+def _save_external_features(supabase: Client, product_id: str, weather_df: pd.DataFrame, trends_df: pd.DataFrame) -> None:
+    """Upsert fetched weather + trends into external_features cache."""
+    if weather_df.empty and trends_df.empty:
+        return
+
+    merged = pd.DataFrame()
+    if not weather_df.empty:
+        merged = weather_df[["date", "temperature", "precipitation", "uv_index"]].copy()
+        merged["date"] = pd.to_datetime(merged["date"]).dt.strftime("%Y-%m-%d")
+
+    if not trends_df.empty:
+        t = trends_df[["date", "search_interest"]].copy()
+        t["date"] = pd.to_datetime(t["date"]).dt.strftime("%Y-%m-%d")
+        if merged.empty:
+            merged = t
+        else:
+            merged = merged.merge(t, on="date", how="outer")
+
+    if merged.empty:
+        return
+
+    for col in ["temperature", "precipitation", "uv_index", "search_interest"]:
+        if col not in merged.columns:
+            merged[col] = None
+
+    merged["product_id"] = product_id
+
+    import math
+
+    def _clean(v):
+        if isinstance(v, float) and (math.isnan(v) or math.isinf(v)):
+            return None
+        return v
+
+    # to_dict keeps float NaN as float('nan') which is not JSON-serialisable;
+    # fix it at the dict level where None actually stays None
+    raw_rows = merged[
+        ["product_id", "date", "temperature", "precipitation", "uv_index", "search_interest"]
+    ].to_dict(orient="records")
+    rows = [{k: _clean(v) for k, v in rec.items()} for rec in raw_rows]
+
+    try:
+        supabase.table("external_features").upsert(rows, on_conflict="product_id,date").execute()
+        logger.info("external_features: upserted %d rows for product %s", len(rows), product_id)
+    except Exception as exc:
+        logger.error("external_features: upsert failed — %s", exc)
+
+
+def _load_cached_external_features(
+    supabase: Client, product_id: str, start_date: str, end_date: str
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Load cached external features; returns (weather_df, trends_df)."""
+    empty_weather = pd.DataFrame(columns=["date", "temperature", "precipitation", "uv_index"])
+    empty_trends = pd.DataFrame(columns=["date", "search_interest"])
+    try:
+        result = (
+            supabase.table("external_features")
+            .select("date,temperature,precipitation,uv_index,search_interest")
+            .eq("product_id", product_id)
+            .gte("date", start_date)
+            .lte("date", end_date)
+            .order("date")
+            .execute()
+        )
+        if not result.data:
+            return empty_weather, empty_trends
+
+        df = pd.DataFrame(result.data)
+        weather_cols = ["temperature", "precipitation", "uv_index"]
+        trends_cols = ["search_interest"]
+
+        weather_df = df[["date"] + weather_cols].dropna(subset=weather_cols, how="all")
+        trends_df = df[["date"] + trends_cols].dropna(subset=trends_cols, how="all")
+
+        return weather_df, trends_df
+    except Exception:
+        return empty_weather, empty_trends
 
 
 def _compute_shap(hist_df: pd.DataFrame, regressors: list) -> dict:

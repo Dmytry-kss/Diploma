@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
+import { useLocation } from 'react-router-dom';
 import {
   ComposedChart, Area, Line, XAxis, YAxis, CartesianGrid,
   Tooltip, Legend, ResponsiveContainer, BarChart, Bar, Cell, ReferenceLine,
@@ -6,6 +7,8 @@ import {
 import { Layout } from '../components/layout/Layout';
 import { Header } from '../components/layout/Header';
 import { LoadingSpinner } from '../components/ui/LoadingSpinner';
+import { Skeleton } from '../components/ui/Skeleton';
+import { useToast } from '../context/ToastContext';
 import { useProducts } from '../hooks/useProducts';
 import { useForecastPolling } from '../hooks/useForecastPolling';
 import { forecastsApi } from '../api/forecasts';
@@ -70,6 +73,8 @@ interface ResultsState {
 }
 
 export function ForecastPage() {
+  const location = useLocation();
+  const toast = useToast();
   const { products, loading: productsLoading } = useProducts();
 
   const [selectedProductId, setSelectedProductId] = useState('');
@@ -142,11 +147,10 @@ export function ForecastPage() {
         setResults(null);
       } else {
         const historicalSales = salesRes.status === 'fulfilled'
-          ? [...salesRes.value]
-              .sort((a, b) => a.date.localeCompare(b.date))
-              .slice(-60)
+          ? [...salesRes.value].sort((a, b) => a.date.localeCompare(b.date))
           : [];
         setResults({
+
           forecastId,
           values,
           shap:            s.status   === 'fulfilled' ? s.value   : null,
@@ -162,6 +166,17 @@ export function ForecastPage() {
     } finally {
       setLoadingResults(false);
     }
+  }, []);
+
+  /* auto-load forecast when navigated from HistoryPage */
+  useEffect(() => {
+    const state = location.state as { forecastId?: string; productId?: string } | null;
+    if (state?.forecastId && state?.productId) {
+      setSelectedProductId(state.productId);
+      loadResults(state.forecastId, state.productId);
+      window.history.replaceState({}, document.title);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   /* trigger load when polling completes */
@@ -187,9 +202,12 @@ export function ForecastPage() {
         include_trends:  inclTrends,
       });
       setCurrentForecastId(res.forecast_id);
+      toast.success('Forecast started — training in progress…');
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
-      setRunError(msg ?? 'Failed to start forecast. Make sure the product has sufficient sales data (≥ 90 rows).');
+      const errMsg = msg ?? 'Failed to start forecast. Make sure the product has sufficient sales data (≥ 90 rows).';
+      setRunError(errMsg);
+      toast.error(errMsg);
     } finally {
       setRunning(false);
     }
@@ -239,11 +257,11 @@ export function ForecastPage() {
         )}
       </Header>
 
-      <div className="flex h-[calc(100vh-56px)]">
+      <div className="flex flex-col md:flex-row md:h-[calc(100vh-56px)]">
 
         {/* ── Left config panel ── */}
-        <div className="w-72 flex-shrink-0 border-r border-gray-200 bg-gray-50 overflow-y-auto flex flex-col">
-          <div className="p-5 space-y-5 flex-1">
+        <div className="w-full md:w-72 md:flex-shrink-0 border-b md:border-b-0 md:border-r border-gray-200 bg-gray-50 md:overflow-y-auto flex flex-col">
+          <div className="p-4 md:p-5 space-y-4 md:space-y-5 flex-1">
 
             {/* Product */}
             <div>
@@ -324,7 +342,7 @@ export function ForecastPage() {
 
           {/* ── Recent forecasts history ── */}
           {selectedProductId && (
-            <div className="border-t border-gray-200 p-4">
+            <div className="hidden md:block border-t border-gray-200 p-4">
               <div className="flex items-center justify-between mb-2">
                 <div className="flex items-center gap-1.5 text-xs font-semibold text-gray-500 uppercase tracking-wide">
                   <History size={11} /> History
@@ -375,8 +393,8 @@ export function ForecastPage() {
 
           {/* Progress bar during polling */}
           {(isPolling || (pollError && !hasResults)) && (
-            <div className="p-6 space-y-4">
-              <div className="bg-white rounded-xl border border-gray-200 p-6">
+            <div className="p-4 md:p-6 space-y-4">
+              <div className="bg-white rounded-xl border border-gray-200 p-4 md:p-6">
                 <div className="flex items-center justify-between mb-3">
                   <div className="flex items-center gap-2">
                     {!pollError && <LoadingSpinner size="sm" />}
@@ -419,7 +437,7 @@ export function ForecastPage() {
                     { label: 'LSTM',     done: progress >= 65 },
                     { label: 'Ensemble', done: progress >= 90 },
                   ].map(({ label, done }) => (
-                    <div key={label} className={`bg-white rounded-lg border px-4 py-3 flex items-center gap-2 ${done ? 'border-green-200' : 'border-gray-200'}`}>
+                    <div key={label} className={`bg-white rounded-lg border px-2 md:px-4 py-2 md:py-3 flex items-center gap-1.5 md:gap-2 ${done ? 'border-green-200' : 'border-gray-200'}`}>
                       {done
                         ? <CheckCircle size={14} className="text-green-500 flex-shrink-0" />
                         : <div className="w-3.5 h-3.5 rounded-full border-2 border-gray-300 flex-shrink-0" />}
@@ -433,9 +451,12 @@ export function ForecastPage() {
 
           {/* Loading results */}
           {loadingResults && (
-            <div className="flex flex-col items-center justify-center h-64 gap-3">
-              <LoadingSpinner size="lg" />
-              <p className="text-sm text-gray-400">Loading forecast results…</p>
+            <div className="p-6 space-y-4">
+              <div className="flex gap-2">
+                {[...Array(5)].map((_, i) => <Skeleton key={i} className="h-8 w-24" />)}
+              </div>
+              <Skeleton className="h-12 w-full" />
+              <Skeleton className="h-72 w-full" />
             </div>
           )}
 
@@ -457,7 +478,7 @@ export function ForecastPage() {
 
           {/* Empty state */}
           {!isPolling && !pollError && !hasResults && !loadingResults && !loadError && (
-            <div className="flex items-center justify-center h-full">
+            <div className="flex items-center justify-center min-h-[300px]">
               <div className="text-center max-w-sm">
                 <div className="w-16 h-16 bg-indigo-50 rounded-2xl flex items-center justify-center mx-auto mb-4">
                   <TrendingUp size={28} className="text-indigo-400" />
@@ -473,11 +494,11 @@ export function ForecastPage() {
 
           {/* ── Results ── */}
           {hasResults && !loadingResults && (
-            <div className="flex flex-col h-full">
+            <div className="flex flex-col min-h-full">
 
               {/* Metrics bar */}
               {activeMetrics && (
-                <div className="px-6 pt-5 pb-0">
+                <div className="px-4 md:px-6 pt-4 md:pt-5 pb-0">
                   <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
                     {[
                       { label: 'MAE',  value: activeMetrics.mae  != null ? activeMetrics.mae.toFixed(2)              : '—' },
@@ -495,25 +516,32 @@ export function ForecastPage() {
               )}
 
               {/* Tab bar */}
-              <div className="px-6 border-b border-gray-200 flex gap-1 bg-white sticky top-0 z-10">
+              <div className="px-2 md:px-6 border-b border-gray-200 flex gap-0 md:gap-1 bg-white sticky top-0 z-10 overflow-x-auto">
                 {TABS.map(({ id, label, Icon }) => (
                   <button key={id} onClick={() => setActiveTab(id)}
-                    className={`flex items-center gap-1.5 text-xs font-semibold px-3 py-3 border-b-2 transition-colors ${activeTab === id ? 'border-indigo-600 text-indigo-600' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
+                    className={`flex items-center gap-1 md:gap-1.5 text-xs font-semibold px-2 md:px-3 py-3 border-b-2 transition-colors whitespace-nowrap ${activeTab === id ? 'border-indigo-600 text-indigo-600' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
                     <Icon size={13} /> {label}
                   </button>
                 ))}
               </div>
 
               {/* Tab content */}
-              <div className="flex-1 p-6">
+              <div className="flex-1 p-4 md:p-6">
                 {activeTab === 'forecast'   && results?.values          && <ForecastChart    data={results.values}          productName={selectedProduct?.name} horizonDays={horizonDays} historicalSales={results.historicalSales} />}
                 {activeTab === 'shap'       && results?.shap             && <ShapChart        data={results.shap} />}
-                {activeTab === 'components' && results?.components       && <ComponentsChart  data={results.components} />}
+                {activeTab === 'components' && results && (
+                  <div className="space-y-6">
+                    {results.components
+                      ? <ComponentsChart data={results.components} />
+                      : <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 text-xs text-amber-700">Prophet decomposition not available for LSTM-only model.</div>
+                    }
+                    <SeasonalityHeatmap historicalSales={results.historicalSales} />
+                  </div>
+                )}
                 {activeTab === 'comparison' && results?.comparison       && <ComparisonTable  data={results.comparison} />}
                 {activeTab === 'insights'   && results?.recommendations  && <InsightsPanel    data={results.recommendations} />}
                 {activeTab === 'forecast'   && !results?.values          && <TabEmpty label="Forecast values not available for this entry." />}
                 {activeTab === 'shap'       && !results?.shap            && <TabEmpty label="Feature importance data not available." />}
-                {activeTab === 'components' && !results?.components      && <TabEmpty label="Seasonality components not available (Prophet/Ensemble only)." />}
                 {activeTab === 'comparison' && !results?.comparison      && <TabEmpty label="Model comparison not available." />}
                 {activeTab === 'insights'   && !results?.recommendations && <TabEmpty label="Business insights not available." />}
               </div>
@@ -564,7 +592,7 @@ function TabEmpty({ label }: { label: string }) {
 function ForecastChart({ data, productName, horizonDays, historicalSales = [] }: {
   data: ForecastValues; productName?: string; horizonDays: number; historicalSales?: SaleRecord[];
 }) {
-  const historicalRows = historicalSales.map((s) => ({
+  const historicalRows = historicalSales.slice(-60).map((s) => ({
     date:      fmtDate(s.date),
     actual:    s.quantity as number | null,
     predicted: null as number | null,
@@ -779,7 +807,39 @@ function ComparisonTable({ data }: { data: ComparisonResponse }) {
           Performance on held-out test set · Ensemble weight α = {data.alpha}
         </p>
       </div>
-      <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
+
+      {/* Mobile: per-metric cards (< sm) */}
+      <div className="sm:hidden space-y-2">
+        {metrics.map(({ key, label, desc }) => {
+          const bestVal = best(key);
+          return (
+            <div key={key} className="bg-white border border-gray-200 rounded-xl p-4">
+              <div className="mb-3">
+                <div className="text-sm font-semibold text-gray-900">{label}</div>
+                <div className="text-xs text-gray-400 mt-0.5">{desc}</div>
+              </div>
+              <div className="flex gap-2">
+                {modelKeys.map((m) => {
+                  const val = data.models[m]?.[key];
+                  const isBest = val != null && bestVal != null && Math.abs(val - bestVal) < 1e-9;
+                  return (
+                    <div key={m} className={`flex-1 rounded-lg p-2.5 text-center ${isBest ? 'bg-green-50 border border-green-200' : 'bg-gray-50 border border-gray-200'}`}>
+                      <div className="text-[11px] text-gray-400 mb-1">{MODEL_LABELS[m] ?? m}</div>
+                      <div className={`text-sm font-bold flex items-center justify-center gap-1 ${isBest ? 'text-green-700' : 'text-gray-800'}`}>
+                        {isBest && <CheckCircle size={10} />}
+                        {val != null ? (METRIC_FMT[key]?.(val) ?? val) : '—'}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Desktop: table (≥ sm) */}
+      <div className="hidden sm:block bg-white border border-gray-200 rounded-xl overflow-hidden">
         <table className="w-full text-sm">
           <thead>
             <tr className="bg-gray-50 border-b border-gray-200">
@@ -877,6 +937,94 @@ function InsightsPanel({ data }: { data: RecommendationResponse }) {
             <p className="text-sm text-gray-700 leading-relaxed">{rec}</p>
           </div>
         ))}
+      </div>
+    </div>
+  );
+}
+
+/* ─── Seasonality heatmap ─── */
+function SeasonalityHeatmap({ historicalSales }: { historicalSales: SaleRecord[] }) {
+  const MONTHS  = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  const DAYS    = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
+  const CELL_W  = 38;
+  const CELL_H  = 24;
+  const PAD_L   = 40;
+  const PAD_T   = 22;
+
+  const cells = Array.from({ length: 12 }, () =>
+    Array.from({ length: 7 }, () => ({ sum: 0, count: 0 }))
+  );
+
+  historicalSales.forEach(({ date, quantity }) => {
+    const d   = new Date(date + 'T00:00:00');
+    const mon = d.getMonth();
+    const jsDay = d.getDay();
+    const dow = jsDay === 0 ? 6 : jsDay - 1;
+    cells[mon][dow].sum += quantity;
+    cells[mon][dow].count += 1;
+  });
+
+  const values = cells.map((row) => row.map((c) => (c.count > 0 ? c.sum / c.count : 0)));
+  const allVals = values.flat().filter((v) => v > 0);
+  const minVal  = allVals.length > 0 ? Math.min(...allVals) : 0;
+  const maxVal  = allVals.length > 0 ? Math.max(...allVals) : 1;
+
+  function colorFor(val: number) {
+    if (val === 0) return '#f8fafc';
+    const t = (val - minVal) / (maxVal - minVal || 1);
+    const r = Math.round(0xEF + t * (0x37 - 0xEF));
+    const g = Math.round(0xF6 + t * (0x30 - 0xF6));
+    const b = Math.round(0xFF + t * (0xA3 - 0xFF));
+    return `rgb(${r},${g},${b})`;
+  }
+
+  const svgW = PAD_L + 7 * CELL_W + 8;
+  const svgH = PAD_T + 12 * CELL_H + 8;
+
+  if (historicalSales.length === 0) return null;
+
+  return (
+    <div className="bg-white border border-gray-200 rounded-xl p-4 space-y-3">
+      <div>
+        <span className="text-xs font-semibold text-gray-700">Sales Heatmap</span>
+        <p className="text-xs text-gray-400 mt-0.5">Average quantity by month × day of week (from historical data)</p>
+      </div>
+      <div className="overflow-x-auto">
+        <svg width={svgW} height={svgH}>
+          {DAYS.map((day, j) => (
+            <text key={j} x={PAD_L + j * CELL_W + CELL_W / 2} y={PAD_T - 6}
+              textAnchor="middle" fontSize={10} fill="#94a3b8">{day}</text>
+          ))}
+          {MONTHS.map((mon, i) => (
+            <g key={i}>
+              <text x={PAD_L - 6} y={PAD_T + i * CELL_H + CELL_H / 2 + 4}
+                textAnchor="end" fontSize={10} fill="#64748b">{mon}</text>
+              {DAYS.map((_, j) => {
+                const val = values[i][j];
+                return (
+                  <rect key={j}
+                    x={PAD_L + j * CELL_W + 1} y={PAD_T + i * CELL_H + 1}
+                    width={CELL_W - 2} height={CELL_H - 2} rx={3}
+                    fill={colorFor(val)}>
+                    <title>{`${mon} ${DAYS[j]}: ${val > 0 ? val.toFixed(1) : 'no data'}`}</title>
+                  </rect>
+                );
+              })}
+            </g>
+          ))}
+        </svg>
+      </div>
+      <div className="flex items-center gap-2 text-xs text-gray-400">
+        <span>Low</span>
+        <div className="flex gap-0.5">
+          {[0, 0.2, 0.4, 0.6, 0.8, 1].map((t, i) => {
+            const r = Math.round(0xEF + t * (0x37 - 0xEF));
+            const g = Math.round(0xF6 + t * (0x30 - 0xF6));
+            const b = Math.round(0xFF + t * (0xA3 - 0xFF));
+            return <div key={i} style={{ width: 20, height: 12, borderRadius: 2, backgroundColor: `rgb(${r},${g},${b})` }} />;
+          })}
+        </div>
+        <span>High</span>
       </div>
     </div>
   );
