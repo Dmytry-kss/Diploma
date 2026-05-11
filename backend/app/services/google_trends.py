@@ -1,89 +1,80 @@
-import time
-import random
+import httpx
 import logging
 import pandas as pd
-from datetime import datetime, timedelta
 
 logger = logging.getLogger(__name__)
 
-_HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/124.0.0.0 Safari/537.36"
-    ),
-    "Accept": "application/json, text/plain, */*",
-    "Accept-Language": "uk-UA,uk;q=0.9,en-US;q=0.8,en;q=0.7",
-    "Referer": "https://trends.google.com/",
-}
-
-
-def _try_pytrends(keyword: str, start_date: str, end_date: str) -> pd.DataFrame:
-    from pytrends.request import TrendReq
-
-    pytrends = TrendReq(
-        hl="uk-UA",
-        tz=120,
-        timeout=(15, 30),
-        requests_args={"headers": _HEADERS},
-    )
-    # Small delay to reduce chance of 429
-    time.sleep(random.uniform(1.5, 3.0))
-    pytrends.build_payload([keyword], timeframe=f"{start_date} {end_date}")
-    df = pytrends.interest_over_time()
-    if df.empty:
-        return pd.DataFrame(columns=["date", "search_interest"])
-
-    df = df.reset_index()[["date", keyword]].rename(columns={keyword: "search_interest"})
-    df["date"] = pd.to_datetime(df["date"])
-    df = df.set_index("date").resample("D").interpolate(method="linear").reset_index()
-    df["date"] = df["date"].dt.strftime("%Y-%m-%d")
-    return df
-
-
-def _synthetic_fallback(start_date: str, end_date: str) -> pd.DataFrame:
-    """
-    Generate plausible seasonal search-interest proxy when Google Trends is
-    unavailable.  Values are centred at 50 with ±20 weekly seasonality and
-    ±10 random noise — enough to let Prophet detect the regressor direction
-    without introducing misleading strong trends.
-    """
-    dates = pd.date_range(start=start_date, end=end_date, freq="D")
-    if len(dates) == 0:
-        return pd.DataFrame(columns=["date", "search_interest"])
-
-    rng = random.Random(42)
-    values = []
-    for d in dates:
-        # Weekly seasonality: higher Mon-Fri, lower weekend
-        weekly = 10 * (1 - d.weekday() / 6)
-        # Gentle annual seasonality
-        annual = 10 * (0.5 + 0.5 * ((d.timetuple().tm_yday / 365) * 2 - 1))
-        noise = rng.gauss(0, 5)
-        values.append(max(0.0, min(100.0, 50.0 + weekly + annual + noise)))
-
-    df = pd.DataFrame({"date": dates.strftime("%Y-%m-%d"), "search_interest": values})
-    return df
+_BASE = "https://wikimedia.org/api/rest_v1/metrics/pageviews/per-article"
+_WIKI_MIN_DATE = "2015-07-01"
 
 
 def fetch_trends(keyword: str, start_date: str, end_date: str) -> pd.DataFrame:
+    """
+    Fetch Wikipedia pageviews as a proxy for search interest.
+    
+    Args:
+        keyword: Article title (e.g., "Headphones")
+        start_date: Start date in YYYY-MM-DD format
+        end_date: End date in YYYY-MM-DD format
+    
+    Returns:
+        DataFrame with columns: date, search_interest (normalized 0-100)
+    """
+    empty = pd.DataFrame(columns=["date", "search_interest"])
     if not keyword:
-        return pd.DataFrame(columns=["date", "search_interest"])
+        return empty
 
-    # Try pytrends up to 2 times
-    for attempt in range(2):
-        try:
-            df = _try_pytrends(keyword, start_date, end_date)
-            if not df.empty:
-                logger.info("Google Trends: fetched %d rows for '%s'", len(df), keyword)
-                return df
-        except Exception as exc:
-            logger.warning("Google Trends attempt %d failed: %s", attempt + 1, exc)
-            if attempt == 0:
-                time.sleep(random.uniform(5, 10))
+    # Wikipedia API has data only from 2015-07-01
+    api_start = max(start_date, _WIKI_MIN_DATE)
+    if api_start > end_date:
+        logger.warning("Wikipedia: requested dates before %s", _WIKI_MIN_DATE)
+        return empty
 
-    # Fallback: synthetic seasonal proxy
-    logger.warning(
-        "Google Trends unavailable for '%s' — using synthetic seasonal proxy", keyword
-    )
-    return _synthetic_fallback(start_date, end_date)
+    article = keyword.strip().replace(" ", "_")
+    wiki_start = api_start.replace("-", "")
+    wiki_end = end_date.replace("-", "")
+    url = f"{_BASE}/en.wikipedia/all-access/all-agents/{article}/daily/{wiki_start}/{wiki_end}"
+
+    try:
+        with httpx.Client(timeout=15.0) as client:
+            resp = client.get(url, headers={"User-Agent": "DemandForecastApp/1.0"})
+            resp.raise_for_status()
+        items = resp.json().get("items", [])
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code == 404:
+            logger.warning("Wikipedia: article '%s' not found", article)
+        else:
+            logger.warning("Wikipedia Pageviews error: %s", exc)
+        return empty
+    except Exception as exc:
+        logger.warning("Wikipedia Pageviews fetch failed: %s", exc)
+        return empty
+
+    if not items:
+        return empty
+
+    # Parse response
+    records = [
+        {
+            "date": f"{i['timestamp'][:4]}-{i['timestamp'][4:6]}-{i['timestamp'][6:8]}",
+            "views": float(i["views"])
+        }
+        for i in items
+    ]
+    df = pd.DataFrame(records)
+    df["date"] = pd.to_datetime(df["date"])
+
+    # Fill every calendar day (API sometimes has gaps)
+    full = pd.date_range(start=api_start, end=end_date, freq="D")
+    df = df.set_index("date").reindex(full)
+    df["views"] = df["views"].interpolate(method="linear").bfill().ffill().fillna(0.0)
+
+    # Normalize raw view counts → 0-100 scale (same as Google Trends)
+    max_v = df["views"].max()
+    df["search_interest"] = (df["views"] / max_v * 100).round(2) if max_v > 0 else 0.0
+
+    df = df.reset_index().rename(columns={"index": "date"})
+    df["date"] = df["date"].dt.strftime("%Y-%m-%d")
+
+    logger.info("Wikipedia Pageviews: %d rows for '%s'", len(df), keyword)
+    return df[["date", "search_interest"]]

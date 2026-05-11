@@ -64,6 +64,7 @@ function fmtShort(d: string) {
 
 interface ResultsState {
   forecastId:      string;
+  modelType:       ModelType;
   values:          ForecastValues | null;
   shap:            ShapValues | null;
   components:      ForecastComponents | null;
@@ -126,7 +127,7 @@ export function ForecastPage() {
   }, [products, selectedProductId]);
 
   /* load all result data for a forecast */
-  const loadResults = useCallback(async (forecastId: string, productId: string) => {
+  const loadResults = useCallback(async (forecastId: string, productId: string, forecastModelType: ModelType) => {
     setLoadingResults(true);
     setLoadError(null);
     setResults(null);
@@ -150,8 +151,8 @@ export function ForecastPage() {
           ? [...salesRes.value].sort((a, b) => a.date.localeCompare(b.date))
           : [];
         setResults({
-
           forecastId,
+          modelType:       forecastModelType,
           values,
           shap:            s.status   === 'fulfilled' ? s.value   : null,
           components:      c.status   === 'fulfilled' ? c.value   : null,
@@ -170,10 +171,10 @@ export function ForecastPage() {
 
   /* auto-load forecast when navigated from HistoryPage */
   useEffect(() => {
-    const state = location.state as { forecastId?: string; productId?: string } | null;
+    const state = location.state as { forecastId?: string; productId?: string; modelType?: ModelType } | null;
     if (state?.forecastId && state?.productId) {
       setSelectedProductId(state.productId);
-      loadResults(state.forecastId, state.productId);
+      loadResults(state.forecastId, state.productId, state.modelType ?? 'ensemble');
       window.history.replaceState({}, document.title);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -182,10 +183,10 @@ export function ForecastPage() {
   /* trigger load when polling completes */
   useEffect(() => {
     if (pollStatus === 'completed' && currentForecastId && selectedProductId) {
-      loadResults(currentForecastId, selectedProductId);
+      loadResults(currentForecastId, selectedProductId, modelType);
       fetchHistoryRef.current?.();
     }
-  }, [pollStatus, currentForecastId, selectedProductId, loadResults]);
+  }, [pollStatus, currentForecastId, selectedProductId, modelType, loadResults]);
 
   const handleRun = async () => {
     if (!selectedProductId) return;
@@ -227,7 +228,7 @@ export function ForecastPage() {
   const handleViewForecast = (f: Forecast) => {
     setCurrentForecastId(null);
     setRunError(null);
-    loadResults(f.id, f.product_id);
+    loadResults(f.id, f.product_id, f.model_type);
   };
 
   const isPolling     = pollStatus === 'pending' || pollStatus === 'running';
@@ -235,12 +236,12 @@ export function ForecastPage() {
   const selectedProduct = products.find((p) => p.id === selectedProductId);
 
   /* current metrics — from polling if available, else from results comparison */
-  const activeMetrics = pollMetrics ?? (results?.comparison
+  const activeMetrics = pollMetrics ?? (results?.comparison && results?.modelType
     ? {
-        mae:  results.comparison.models.ensemble?.mae,
-        rmse: results.comparison.models.ensemble?.rmse,
-        mape: results.comparison.models.ensemble?.mape,
-        r2:   results.comparison.models.ensemble?.r2,
+        mae:  results.comparison.models[results.modelType]?.mae,
+        rmse: results.comparison.models[results.modelType]?.rmse,
+        mape: results.comparison.models[results.modelType]?.mape,
+        r2:   results.comparison.models[results.modelType]?.r2,
       }
     : null);
 
@@ -415,7 +416,7 @@ export function ForecastPage() {
                     <p className="text-xs text-amber-600">{pollError}</p>
                     {currentForecastId && (
                       <button
-                        onClick={() => currentForecastId && selectedProductId && loadResults(currentForecastId, selectedProductId)}
+                        onClick={() => currentForecastId && selectedProductId && loadResults(currentForecastId, selectedProductId, modelType)}
                         className="inline-flex items-center gap-1.5 text-xs font-semibold text-indigo-600 hover:text-indigo-800 border border-indigo-200 px-3 py-1.5 rounded-lg"
                       >
                         <RefreshCw size={12} /> Try Loading Results Anyway
