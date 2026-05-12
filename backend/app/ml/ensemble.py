@@ -21,7 +21,7 @@ def combine_ensemble(
     def mae_loss(alpha: float) -> float:
         return float(np.mean(np.abs(y - (alpha * p_val + (1 - alpha) * l_val))))
 
-    result = minimize_scalar(mae_loss, bounds=(0.20, 0.80), method="bounded")
+    result = minimize_scalar(mae_loss, bounds=(0.0, 1.0), method="bounded")
     alpha = float(result.x)
 
     n = min(len(prophet_future), len(lstm_future))

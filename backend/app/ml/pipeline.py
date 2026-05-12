@@ -166,9 +166,9 @@ async def _run(product_id, forecast_id, horizon_days, model_type,
 
     if use_lstm:
         # Keras/TF also has issues with ThreadPoolExecutor — call directly
-        l_val_result = train_predict_lstm(train_hist, val_size)
+        l_val_result = train_predict_lstm(train_hist, val_size, regressors, val_future_df)
         lstm_val_preds = [p["predicted"] for p in l_val_result["predictions"]]
-        lstm_final = train_predict_lstm(hist_df, horizon_days)
+        lstm_final = train_predict_lstm(hist_df, horizon_days, regressors, future_df)
 
     # ── 10. Final predictions + alpha ────────────────────────────────────────
     if model_type == "ensemble" and prophet_final and lstm_final:
