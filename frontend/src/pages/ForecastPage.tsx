@@ -320,7 +320,7 @@ export function ForecastPage() {
               <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">External Signals</label>
               <div className="space-y-2">
                 <Toggle icon={CloudSun} label="Weather data"   hint="Open-Meteo API"    checked={inclWeather} onChange={setInclWeather} />
-                <Toggle icon={Search}   label="Google Trends"  hint="Keyword interest"  checked={inclTrends}  onChange={setInclTrends} />
+                <Toggle icon={Search}   label="Wikimedia Trends"  hint="Keyword interest"  checked={inclTrends}  onChange={setInclTrends} />
               </div>
             </div>
 
@@ -906,7 +906,7 @@ function InsightsPanel({ data }: { data: RecommendationResponse }) {
     <div className="space-y-5">
       <div>
         <h3 className="text-sm font-semibold text-gray-900">Business Insights</h3>
-        <p className="text-xs text-gray-400 mt-0.5">AI-generated recommendations based on forecast results</p>
+        <p className="text-xs text-gray-400 mt-0.5">Rule-based recommendations derived from forecast trend and risk level</p>
       </div>
       <div className="grid grid-cols-2 gap-4">
         <div className={`rounded-xl border p-4 ${trend.cls}`}>

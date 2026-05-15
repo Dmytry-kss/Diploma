@@ -209,7 +209,7 @@ export function UploadPage() {
                 </div>
                 <div>
                   <label className="block text-xs font-medium text-gray-600 mb-1 flex items-center gap-1">
-                    <Search size={10} /> Google Trends keyword
+                    <Search size={10} /> Wikimedia Trends keyword
                   </label>
                   <input
                     type="text"

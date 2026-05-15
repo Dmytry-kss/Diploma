@@ -116,38 +116,38 @@ def get_recommendations(forecast_id: str, current_user: dict = Depends(get_curre
     recommendations = []
     if trend_direction == "growing" and risk_level == "low":
         recommendations = [
-            "Попит стабільно зростає — рекомендується збільшити замовлення на 15–20%",
-            "Розгляньте можливість розширення асортименту суміжних товарів",
+            "Demand is steadily growing — consider increasing your next order by 15–20%",
+            "Explore expanding your product range with complementary items",
         ]
     elif trend_direction == "growing" and risk_level == "medium":
         recommendations = [
-            "Попит зростає, але прогноз має середню точність — збільшуйте запаси поступово",
-            "Рекомендується моніторинг продажів щотижня",
+            "Demand is growing, but forecast accuracy is moderate — increase stock gradually",
+            "Monitor sales weekly to validate the upward trend",
         ]
     elif trend_direction == "growing" and risk_level == "high":
         recommendations = [
-            "Попит зростає, але точність прогнозу низька — будьте обережні зі збільшенням запасів",
-            "Рекомендується покращити якість даних та збільшити історію продажів",
+            "Demand is growing, but forecast accuracy is low — be cautious with inventory increases",
+            "Improve data quality and extend sales history to boost model accuracy",
         ]
     elif trend_direction == "declining" and risk_level == "low":
         recommendations = [
-            "Прогнозується зниження попиту — скоротіть наступне замовлення на 10–15%",
-            "Розгляньте проведення акції для зниження поточних запасів",
+            "Demand decline is forecast — reduce your next order by 10–15%",
+            "Consider a promotional campaign to clear existing inventory",
         ]
     elif trend_direction == "declining":
         recommendations = [
-            "Попит знижується — рекомендується скоротити замовлення",
-            "Розгляньте маркетингові активності для стимулювання продажів",
+            "Demand is declining — reduce order quantities accordingly",
+            "Consider marketing activities to stimulate sales",
         ]
     elif trend_direction == "stable" and risk_level == "low":
         recommendations = [
-            "Попит стабільний — підтримуйте поточний рівень замовлень",
-            "Оптимальний час для оптимізації складських витрат",
+            "Demand is stable — maintain current order levels",
+            "Good time to optimise warehouse and carrying costs",
         ]
     else:
         recommendations = [
-            "Попит стабільний — підтримуйте поточний рівень замовлень",
-            "Рекомендується моніторинг ринкових змін",
+            "Demand is stable — maintain current order levels",
+            "Monitor the market for any emerging changes",
         ]
 
     return RecommendationResponse(
