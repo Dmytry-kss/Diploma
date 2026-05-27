@@ -37,7 +37,7 @@ const TABS: { id: Tab; label: string; Icon: React.ElementType }[] = [
 const MODEL_LABELS: Record<string, string> = {
   prophet:  'Prophet',
   lstm:     'LSTM',
-  ensemble: 'Ensemble',
+  ensemble: 'Комбінування',
 };
 
 const STATUS_CFG = {
@@ -180,11 +180,13 @@ export function ForecastPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  /* trigger load when polling completes */
+  /* trigger load when polling completes — small delay lets Supabase flush writes */
   useEffect(() => {
     if (pollStatus === 'completed' && currentForecastId && selectedProductId) {
-      loadResults(currentForecastId, selectedProductId, modelType);
-      fetchHistoryRef.current?.();
+      setTimeout(() => {
+        loadResults(currentForecastId, selectedProductId, modelType);
+        fetchHistoryRef.current?.();
+      }, 800);
     }
   }, [pollStatus, currentForecastId, selectedProductId, modelType, loadResults]);
 
@@ -787,12 +789,15 @@ function ChartPanel({ title, subtitle, color, children }: { title: string; subti
 /* ─── Comparison table ─── */
 function ComparisonTable({ data }: { data: ComparisonResponse }) {
   const modelKeys = Object.keys(data.models) as (keyof typeof data.models)[];
-  const metrics = [
+  const accuracyMetrics = [
     { key: 'mae',  label: 'MAE',  desc: 'Mean Absolute Error — lower is better' },
     { key: 'rmse', label: 'RMSE', desc: 'Root Mean Square Error — lower is better' },
     { key: 'mape', label: 'MAPE', desc: 'Mean Absolute % Error — lower is better' },
     { key: 'r2',   label: 'R²',   desc: 'Coefficient of Determination — higher is better' },
   ] as const;
+
+  const adequacyModelKeys = modelKeys.filter((m) => m !== 'ensemble');
+  const hasAdequacy = adequacyModelKeys.some((m) => data.models[m]?.ljung_box_p != null);
 
   const best = (k: 'mae' | 'rmse' | 'mape' | 'r2') => {
     const vals = modelKeys.map((m) => data.models[m]?.[k]).filter((v): v is number => v != null);
@@ -801,86 +806,201 @@ function ComparisonTable({ data }: { data: ComparisonResponse }) {
   };
 
   return (
-    <div className="space-y-4">
-      <div>
-        <h3 className="text-sm font-semibold text-gray-900">Model Comparison</h3>
-        <p className="text-xs text-gray-400 mt-0.5">
-          Performance on held-out test set · Ensemble weight α = {data.alpha}
-        </p>
-      </div>
+    <div className="space-y-6">
+      {/* ── Table 1: Forecast accuracy ── */}
+      <div className="space-y-3">
+        <div>
+          <h3 className="text-sm font-semibold text-gray-900">Таблиця 1 — Точність прогнозу</h3>
+          <p className="text-xs text-gray-400 mt-0.5">
+            Метрики на hold-out тестовій вибірці · вага комбінування α = {data.alpha}
+          </p>
+        </div>
 
-      {/* Mobile: per-metric cards (< sm) */}
-      <div className="sm:hidden space-y-2">
-        {metrics.map(({ key, label, desc }) => {
-          const bestVal = best(key);
-          return (
-            <div key={key} className="bg-white border border-gray-200 rounded-xl p-4">
-              <div className="mb-3">
-                <div className="text-sm font-semibold text-gray-900">{label}</div>
-                <div className="text-xs text-gray-400 mt-0.5">{desc}</div>
-              </div>
-              <div className="flex gap-2">
-                {modelKeys.map((m) => {
-                  const val = data.models[m]?.[key];
-                  const isBest = val != null && bestVal != null && Math.abs(val - bestVal) < 1e-9;
-                  return (
-                    <div key={m} className={`flex-1 rounded-lg p-2.5 text-center ${isBest ? 'bg-green-50 border border-green-200' : 'bg-gray-50 border border-gray-200'}`}>
-                      <div className="text-[11px] text-gray-400 mb-1">{MODEL_LABELS[m] ?? m}</div>
-                      <div className={`text-sm font-bold flex items-center justify-center gap-1 ${isBest ? 'text-green-700' : 'text-gray-800'}`}>
-                        {isBest && <CheckCircle size={10} />}
-                        {val != null ? (METRIC_FMT[key]?.(val) ?? val) : '—'}
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          );
-        })}
-      </div>
-
-      {/* Desktop: table (≥ sm) */}
-      <div className="hidden sm:block bg-white border border-gray-200 rounded-xl overflow-hidden">
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="bg-gray-50 border-b border-gray-200">
-              <th className="text-left px-5 py-3 text-xs font-semibold text-gray-500">Metric</th>
-              {modelKeys.map((m) => (
-                <th key={m} className="text-center px-5 py-3 text-xs font-semibold text-gray-700">
-                  {MODEL_LABELS[m] ?? m}
-                </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-gray-100">
-            {metrics.map(({ key, label, desc }) => {
-              const bestVal = best(key);
-              return (
-                <tr key={key} className="hover:bg-gray-50 transition-colors">
-                  <td className="px-5 py-3.5">
-                    <div className="font-semibold text-gray-900">{label}</div>
-                    <div className="text-xs text-gray-400">{desc}</div>
-                  </td>
+        {/* Mobile */}
+        <div className="sm:hidden space-y-2">
+          {accuracyMetrics.map(({ key, label, desc }) => {
+            const bestVal = best(key);
+            return (
+              <div key={key} className="bg-white border border-gray-200 rounded-xl p-4">
+                <div className="mb-3">
+                  <div className="text-sm font-semibold text-gray-900">{label}</div>
+                  <div className="text-xs text-gray-400 mt-0.5">{desc}</div>
+                </div>
+                <div className="flex gap-2">
                   {modelKeys.map((m) => {
                     const val = data.models[m]?.[key];
                     const isBest = val != null && bestVal != null && Math.abs(val - bestVal) < 1e-9;
                     return (
+                      <div key={m} className={`flex-1 rounded-lg p-2.5 text-center ${isBest ? 'bg-green-50 border border-green-200' : 'bg-gray-50 border border-gray-200'}`}>
+                        <div className="text-[11px] text-gray-400 mb-1">{MODEL_LABELS[m] ?? m}</div>
+                        <div className={`text-sm font-bold flex items-center justify-center gap-1 ${isBest ? 'text-green-700' : 'text-gray-800'}`}>
+                          {isBest && <CheckCircle size={10} />}
+                          {val != null ? (METRIC_FMT[key]?.(val) ?? val) : '—'}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+        {/* Desktop */}
+        <div className="hidden sm:block bg-white border border-gray-200 rounded-xl overflow-hidden">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="bg-gray-50 border-b border-gray-200">
+                <th className="text-left px-5 py-3 text-xs font-semibold text-gray-500">Метрика</th>
+                {modelKeys.map((m) => (
+                  <th key={m} className="text-center px-5 py-3 text-xs font-semibold text-gray-700">
+                    {MODEL_LABELS[m] ?? m}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-100">
+              {accuracyMetrics.map(({ key, label, desc }) => {
+                const bestVal = best(key);
+                return (
+                  <tr key={key} className="hover:bg-gray-50 transition-colors">
+                    <td className="px-5 py-3.5">
+                      <div className="font-semibold text-gray-900">{label}</div>
+                      <div className="text-xs text-gray-400">{desc}</div>
+                    </td>
+                    {modelKeys.map((m) => {
+                      const val = data.models[m]?.[key];
+                      const isBest = val != null && bestVal != null && Math.abs(val - bestVal) < 1e-9;
+                      return (
+                        <td key={m} className="px-5 py-3.5 text-center">
+                          {val != null ? (
+                            <span className={`inline-flex items-center gap-1 text-sm font-semibold px-2.5 py-0.5 rounded-full ${isBest ? 'bg-green-100 text-green-700' : 'text-gray-700'}`}>
+                              {isBest && <CheckCircle size={11} />}
+                              {METRIC_FMT[key]?.(val) ?? val}
+                            </span>
+                          ) : <span className="text-gray-300">—</span>}
+                        </td>
+                      );
+                    })}
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* ── Table 2: Model adequacy ── */}
+      {hasAdequacy && (
+        <div className="space-y-3">
+          <div>
+            <h3 className="text-sm font-semibold text-gray-900">Таблиця 2 — Адекватність моделі</h3>
+            <p className="text-xs text-gray-400 mt-0.5">
+              Діагностика залишків на тестовій вибірці · Ljung-Box: p &gt; 0.05 = залишки некорельовані
+            </p>
+          </div>
+          <div className="hidden sm:block bg-white border border-gray-200 rounded-xl overflow-hidden">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="bg-gray-50 border-b border-gray-200">
+                  <th className="text-left px-5 py-3 text-xs font-semibold text-gray-500">Критерій</th>
+                  {adequacyModelKeys.map((m) => (
+                    <th key={m} className="text-center px-5 py-3 text-xs font-semibold text-gray-700">
+                      {MODEL_LABELS[m] ?? m}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100">
+                <tr className="hover:bg-gray-50 transition-colors">
+                  <td className="px-5 py-3.5">
+                    <div className="font-semibold text-gray-900">Ljung-Box p</div>
+                    <div className="text-xs text-gray-400">p &gt; 0.05 — залишки «білий шум»</div>
+                  </td>
+                  {adequacyModelKeys.map((m) => {
+                    const p = data.models[m]?.ljung_box_p;
+                    const ok = p != null && p > 0.05;
+                    return (
                       <td key={m} className="px-5 py-3.5 text-center">
-                        {val != null ? (
-                          <span className={`inline-flex items-center gap-1 text-sm font-semibold px-2.5 py-0.5 rounded-full ${isBest ? 'bg-green-100 text-green-700' : 'text-gray-700'}`}>
-                            {isBest && <CheckCircle size={11} />}
-                            {METRIC_FMT[key]?.(val) ?? val}
+                        {p != null ? (
+                          <span className={`inline-flex items-center gap-1 text-sm font-semibold px-2.5 py-0.5 rounded-full ${ok ? 'bg-green-100 text-green-700' : 'bg-red-50 text-red-600'}`}>
+                            {ok ? <CheckCircle size={11} /> : <AlertTriangle size={11} />}
+                            {p.toFixed(3)}
                           </span>
                         ) : <span className="text-gray-300">—</span>}
                       </td>
                     );
                   })}
                 </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
+                <tr className="hover:bg-gray-50 transition-colors">
+                  <td className="px-5 py-3.5">
+                    <div className="font-semibold text-gray-900">Середнє залишків</div>
+                    <div className="text-xs text-gray-400">≈ 0 — відсутнє систематичне зміщення</div>
+                  </td>
+                  {adequacyModelKeys.map((m) => {
+                    const v = data.models[m]?.residual_mean;
+                    return (
+                      <td key={m} className="px-5 py-3.5 text-center">
+                        {v != null ? (
+                          <span className="text-sm font-semibold text-gray-700">
+                            {v >= 0 ? '+' : ''}{v.toFixed(2)}
+                          </span>
+                        ) : <span className="text-gray-300">—</span>}
+                      </td>
+                    );
+                  })}
+                </tr>
+                <tr className="hover:bg-gray-50 transition-colors">
+                  <td className="px-5 py-3.5">
+                    <div className="font-semibold text-gray-900">Std залишків</div>
+                    <div className="text-xs text-gray-400">менше відносно середнього y — краще</div>
+                  </td>
+                  {adequacyModelKeys.map((m) => {
+                    const v = data.models[m]?.residual_std;
+                    return (
+                      <td key={m} className="px-5 py-3.5 text-center">
+                        {v != null ? (
+                          <span className="text-sm font-semibold text-gray-700">{v.toFixed(2)}</span>
+                        ) : <span className="text-gray-300">—</span>}
+                      </td>
+                    );
+                  })}
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          {/* Mobile adequacy */}
+          <div className="sm:hidden space-y-2">
+            {[
+              { key: 'ljung_box_p' as const, label: 'Ljung-Box p', desc: 'p > 0.05 = адекватна' },
+              { key: 'residual_mean' as const, label: 'Середнє залишків', desc: '≈ 0 = без зміщення' },
+              { key: 'residual_std' as const, label: 'Std залишків', desc: 'менше = краще' },
+            ].map(({ key, label, desc }) => (
+              <div key={key} className="bg-white border border-gray-200 rounded-xl p-4">
+                <div className="mb-3">
+                  <div className="text-sm font-semibold text-gray-900">{label}</div>
+                  <div className="text-xs text-gray-400 mt-0.5">{desc}</div>
+                </div>
+                <div className="flex gap-2">
+                  {adequacyModelKeys.map((m) => {
+                    const v = data.models[m]?.[key];
+                    const isLjung = key === 'ljung_box_p';
+                    const ok = isLjung && v != null && (v as number) > 0.05;
+                    return (
+                      <div key={m} className={`flex-1 rounded-lg p-2.5 text-center ${isLjung ? (ok ? 'bg-green-50 border border-green-200' : 'bg-red-50 border border-red-200') : 'bg-gray-50 border border-gray-200'}`}>
+                        <div className="text-[11px] text-gray-400 mb-1">{MODEL_LABELS[m] ?? m}</div>
+                        <div className={`text-sm font-bold ${isLjung ? (ok ? 'text-green-700' : 'text-red-600') : 'text-gray-800'}`}>
+                          {v != null ? (key === 'residual_mean' ? ((v as number) >= 0 ? '+' : '') + (v as number).toFixed(2) : (v as number).toFixed(3)) : '—'}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

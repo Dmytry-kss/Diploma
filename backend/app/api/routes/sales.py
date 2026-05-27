@@ -71,7 +71,9 @@ async def upload_sales(
 
     records = df[["product_id", "date", "quantity", "price"]].to_dict(orient="records")
 
-    supabase.table("sales").upsert(records, on_conflict="product_id,date").execute()
+    batch_size = 500
+    for i in range(0, len(records), batch_size):
+        supabase.table("sales").upsert(records[i:i + batch_size], on_conflict="product_id,date").execute()
 
     return {
         "inserted": len(records),
@@ -83,7 +85,7 @@ async def upload_sales(
 def get_sales(product_id: str, current_user: dict = Depends(get_current_user)):
     supabase = get_supabase()
     get_user_product(product_id, current_user["id"], supabase)
-    result = supabase.table("sales").select("*").eq("product_id", product_id).order("date").execute()
+    result = supabase.table("sales").select("*").eq("product_id", product_id).order("date").range(0, 49999).execute()
     return result.data
 
 
@@ -102,7 +104,7 @@ def get_sales_stats(product_id: str, current_user: dict = Depends(get_current_us
     supabase = get_supabase()
     get_user_product(product_id, current_user["id"], supabase)
 
-    result = supabase.table("sales").select("date,quantity").eq("product_id", product_id).order("date").execute()
+    result = supabase.table("sales").select("date,quantity").eq("product_id", product_id).order("date").range(0, 49999).execute()
     if not result.data:
         raise HTTPException(status_code=404, detail="No sales data found for this product")
 

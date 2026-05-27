@@ -15,7 +15,7 @@ from app.services.feature_eng import build_feature_matrix
 from app.ml.prophet_model import train_predict_prophet
 from app.ml.lstm_model import train_predict_lstm
 from app.ml.ensemble import combine_ensemble
-from app.ml.metrics import compute_metrics
+from app.ml.metrics import compute_metrics, compute_adequacy_metrics
 
 MIN_ROWS = 14
 LSTM_MIN_ROWS = 60
@@ -47,6 +47,7 @@ async def _run(product_id, forecast_id, horizon_days, model_type,
         .select("date,quantity")
         .eq("product_id", product_id)
         .order("date")
+        .range(0, 49999)
         .execute()
     )
     if not sales_result.data:
@@ -168,7 +169,15 @@ async def _run(product_id, forecast_id, horizon_days, model_type,
         # Keras/TF also has issues with ThreadPoolExecutor — call directly
         l_val_result = train_predict_lstm(train_hist, val_size, regressors, val_future_df)
         lstm_val_preds = [p["predicted"] for p in l_val_result["predictions"]]
-        lstm_final = train_predict_lstm(hist_df, horizon_days, regressors, future_df)
+        # Compute residual std on validation set → used for statistically-derived CIs
+        _min = min(len(lstm_val_preds), len(val_actuals))
+        lstm_residual_std = float(np.std(
+            val_actuals[-_min:] - np.array(lstm_val_preds[-_min:])
+        ))
+        lstm_final = train_predict_lstm(
+            hist_df, horizon_days, regressors, future_df,
+            residual_std=lstm_residual_std,
+        )
 
     # ── 10. Final predictions + alpha ────────────────────────────────────────
     if model_type == "ensemble" and prophet_final and lstm_final:
@@ -201,15 +210,28 @@ async def _run(product_id, forecast_id, horizon_days, model_type,
     # ── 11. Metrics ──────────────────────────────────────────────────────────
     metrics = compute_metrics(val_actuals_trimmed, val_preds)
     
+    # Log forecast dispersion — used to justify model combination (Bates-Granger)
+    if prophet_val_preds and lstm_val_preds:
+        _p_std = float(np.std(prophet_val_preds))
+        _l_std = float(np.std(lstm_val_preds))
+        logger.info(
+            "Forecast combination: Prophet std=%.3f, LSTM std=%.3f, optimal alpha=%.3f",
+            _p_std, _l_std, alpha if model_type == "ensemble" else float(model_type == "prophet"),
+        )
+
     # Compute individual model metrics for comparison
     prophet_metrics = None
     lstm_metrics = None
     if prophet_val_preds and len(prophet_val_preds) > 0:
         min_len_p = min(len(prophet_val_preds), len(val_actuals))
-        prophet_metrics = compute_metrics(val_actuals[-min_len_p:], np.array(prophet_val_preds[-min_len_p:]))
+        p_true = val_actuals[-min_len_p:]
+        p_pred = np.array(prophet_val_preds[-min_len_p:])
+        prophet_metrics = {**compute_metrics(p_true, p_pred), **compute_adequacy_metrics(p_true, p_pred)}
     if lstm_val_preds and len(lstm_val_preds) > 0:
         min_len_l = min(len(lstm_val_preds), len(val_actuals))
-        lstm_metrics = compute_metrics(val_actuals[-min_len_l:], np.array(lstm_val_preds[-min_len_l:]))
+        l_true = val_actuals[-min_len_l:]
+        l_pred = np.array(lstm_val_preds[-min_len_l:])
+        lstm_metrics = {**compute_metrics(l_true, l_pred), **compute_adequacy_metrics(l_true, l_pred)}
     
     # Extract Prophet components
     prophet_components = prophet_final.get("prophet_components") if prophet_final else None
@@ -262,6 +284,9 @@ async def _run(product_id, forecast_id, horizon_days, model_type,
             "rmse": round(prophet_metrics["rmse"], 4),
             "mape": round(prophet_metrics["mape"], 4),
             "r2": round(prophet_metrics["r2"], 4),
+            "residual_mean": round(prophet_metrics["residual_mean"], 4),
+            "residual_std":  round(prophet_metrics["residual_std"], 4),
+            "ljung_box_p":   round(prophet_metrics["ljung_box_p"], 4) if prophet_metrics["ljung_box_p"] is not None else None,
         }
     if lstm_metrics:
         update_data["lstm_metrics"] = {
@@ -269,6 +294,9 @@ async def _run(product_id, forecast_id, horizon_days, model_type,
             "rmse": round(lstm_metrics["rmse"], 4),
             "mape": round(lstm_metrics["mape"], 4),
             "r2": round(lstm_metrics["r2"], 4),
+            "residual_mean": round(lstm_metrics["residual_mean"], 4),
+            "residual_std":  round(lstm_metrics["residual_std"], 4),
+            "ljung_box_p":   round(lstm_metrics["ljung_box_p"], 4) if lstm_metrics["ljung_box_p"] is not None else None,
         }
     
     # Add Prophet components as JSONB

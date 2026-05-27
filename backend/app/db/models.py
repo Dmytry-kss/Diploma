@@ -106,6 +106,9 @@ class ModelMetrics(BaseModel):
     rmse: float
     mape: float
     r2: float
+    residual_mean: Optional[float] = None
+    residual_std:  Optional[float] = None
+    ljung_box_p:   Optional[float] = None
 
 
 class ComparisonResponse(BaseModel):

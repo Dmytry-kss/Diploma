@@ -41,6 +41,7 @@ def train_predict_lstm(
     horizon: int,
     regressors: list | None = None,
     future_regressors_df: pd.DataFrame | None = None,
+    residual_std: float | None = None,
 ) -> dict:
     _set_seeds()
 
@@ -61,10 +62,11 @@ def train_predict_lstm(
 
     if n < LOOKBACK + 10:
         mean_val = float(np.mean(series[:, 0])) if n > 0 else 0.0
+        half = 1.96 * residual_std if residual_std else mean_val * 0.2
         return {
             "predictions": [
                 {"date": d.date().isoformat(), "predicted": mean_val,
-                 "lower": max(0.0, mean_val * 0.8), "upper": mean_val * 1.2}
+                 "lower": max(0.0, mean_val - half), "upper": mean_val + half}
                 for d in future_dates
             ]
         }
@@ -87,7 +89,7 @@ def train_predict_lstm(
         epochs=100,
         batch_size=16,
         validation_split=0.1,
-        callbacks=[EarlyStopping(patience=10, restore_best_weights=True)],
+        callbacks=[EarlyStopping(patience=20, restore_best_weights=True)],
         verbose=0,
     )
 
@@ -123,12 +125,13 @@ def train_predict_lstm(
     future_vals = scaler.inverse_transform(qty_dummy)[:, 0]
     future_vals = np.clip(future_vals, 0.0, None)
 
+    half = 1.96 * residual_std if residual_std else None
     predictions = [
         {
             "date": d.date().isoformat(),
             "predicted": float(v),
-            "lower": float(max(0.0, v * 0.8)),
-            "upper": float(v * 1.2),
+            "lower": float(max(0.0, v - half if half else v * 0.8)),
+            "upper": float(v + half if half else v * 1.2),
         }
         for d, v in zip(future_dates, future_vals)
     ]

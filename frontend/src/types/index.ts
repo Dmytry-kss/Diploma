@@ -50,6 +50,9 @@ export interface ModelMetrics {
   rmse: number;
   mape: number;
   r2: number;
+  residual_mean?: number;
+  residual_std?: number;
+  ljung_box_p?: number;
 }
 
 export interface Forecast {

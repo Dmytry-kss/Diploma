@@ -241,6 +241,9 @@ def get_comparison(forecast_id: str, current_user: dict = Depends(get_current_us
             rmse=prophet_metrics.get("rmse", 0.0),
             mape=prophet_metrics.get("mape", 0.0),
             r2=prophet_metrics.get("r2", 0.0),
+            residual_mean=prophet_metrics.get("residual_mean"),
+            residual_std=prophet_metrics.get("residual_std"),
+            ljung_box_p=prophet_metrics.get("ljung_box_p"),
         )
 
     lstm_metrics = forecast.get("lstm_metrics")
@@ -250,6 +253,9 @@ def get_comparison(forecast_id: str, current_user: dict = Depends(get_current_us
             rmse=lstm_metrics.get("rmse", 0.0),
             mape=lstm_metrics.get("mape", 0.0),
             r2=lstm_metrics.get("r2", 0.0),
+            residual_mean=lstm_metrics.get("residual_mean"),
+            residual_std=lstm_metrics.get("residual_std"),
+            ljung_box_p=lstm_metrics.get("ljung_box_p"),
         )
 
     return ComparisonResponse(
