@@ -793,16 +793,15 @@ function ComparisonTable({ data }: { data: ComparisonResponse }) {
     { key: 'mae',  label: 'MAE',  desc: 'Mean Absolute Error — lower is better' },
     { key: 'rmse', label: 'RMSE', desc: 'Root Mean Square Error — lower is better' },
     { key: 'mape', label: 'MAPE', desc: 'Mean Absolute % Error — lower is better' },
-    { key: 'r2',   label: 'R²',   desc: 'Coefficient of Determination — higher is better' },
   ] as const;
 
   const adequacyModelKeys = modelKeys.filter((m) => m !== 'ensemble');
-  const hasAdequacy = adequacyModelKeys.some((m) => data.models[m]?.ljung_box_p != null);
+  const hasAdequacy = adequacyModelKeys.some((m) => data.models[m]?.r2 != null);
 
-  const best = (k: 'mae' | 'rmse' | 'mape' | 'r2') => {
+  const best = (k: 'mae' | 'rmse' | 'mape') => {
     const vals = modelKeys.map((m) => data.models[m]?.[k]).filter((v): v is number => v != null);
     if (!vals.length) return null;
-    return k === 'r2' ? Math.max(...vals) : Math.min(...vals);
+    return Math.min(...vals);
   };
 
   return (
@@ -966,6 +965,26 @@ function ComparisonTable({ data }: { data: ComparisonResponse }) {
                     );
                   })}
                 </tr>
+                <tr className="hover:bg-gray-50 transition-colors">
+                  <td className="px-5 py-3.5">
+                    <div className="font-semibold text-gray-900">R²</div>
+                    <div className="text-xs text-gray-400">R² &gt; 0.7 — модель пояснює &gt;70% дисперсії</div>
+                  </td>
+                  {adequacyModelKeys.map((m) => {
+                    const v = data.models[m]?.r2;
+                    const ok = v != null && v > 0.7;
+                    return (
+                      <td key={m} className="px-5 py-3.5 text-center">
+                        {v != null ? (
+                          <span className={`inline-flex items-center gap-1 text-sm font-semibold px-2.5 py-0.5 rounded-full ${ok ? 'bg-green-100 text-green-700' : 'text-gray-700'}`}>
+                            {ok && <CheckCircle size={11} />}
+                            {v.toFixed(4)}
+                          </span>
+                        ) : <span className="text-gray-300">—</span>}
+                      </td>
+                    );
+                  })}
+                </tr>
               </tbody>
             </table>
           </div>
@@ -975,6 +994,7 @@ function ComparisonTable({ data }: { data: ComparisonResponse }) {
               { key: 'ljung_box_p' as const, label: 'Ljung-Box p', desc: 'p > 0.05 = адекватна' },
               { key: 'residual_mean' as const, label: 'Середнє залишків', desc: '≈ 0 = без зміщення' },
               { key: 'residual_std' as const, label: 'Std залишків', desc: 'менше = краще' },
+              { key: 'r2' as const, label: 'R²', desc: 'R² > 0.7 = адекватна' },
             ].map(({ key, label, desc }) => (
               <div key={key} className="bg-white border border-gray-200 rounded-xl p-4">
                 <div className="mb-3">
@@ -985,12 +1005,25 @@ function ComparisonTable({ data }: { data: ComparisonResponse }) {
                   {adequacyModelKeys.map((m) => {
                     const v = data.models[m]?.[key];
                     const isLjung = key === 'ljung_box_p';
-                    const ok = isLjung && v != null && (v as number) > 0.05;
+                    const isR2    = key === 'r2';
+                    const ok = (isLjung && v != null && (v as number) > 0.05)
+                            || (isR2    && v != null && (v as number) > 0.7);
+                    const bgCls = isLjung
+                      ? (ok ? 'bg-green-50 border border-green-200' : 'bg-red-50 border border-red-200')
+                      : isR2
+                        ? (ok ? 'bg-green-50 border border-green-200' : 'bg-gray-50 border border-gray-200')
+                        : 'bg-gray-50 border border-gray-200';
+                    const textCls = (isLjung || isR2) && ok ? 'text-green-700' : isLjung ? 'text-red-600' : 'text-gray-800';
+                    const fmt = (n: number) => {
+                      if (key === 'residual_mean') return (n >= 0 ? '+' : '') + n.toFixed(2);
+                      if (key === 'r2')            return n.toFixed(4);
+                      return n.toFixed(3);
+                    };
                     return (
-                      <div key={m} className={`flex-1 rounded-lg p-2.5 text-center ${isLjung ? (ok ? 'bg-green-50 border border-green-200' : 'bg-red-50 border border-red-200') : 'bg-gray-50 border border-gray-200'}`}>
+                      <div key={m} className={`flex-1 rounded-lg p-2.5 text-center ${bgCls}`}>
                         <div className="text-[11px] text-gray-400 mb-1">{MODEL_LABELS[m] ?? m}</div>
-                        <div className={`text-sm font-bold ${isLjung ? (ok ? 'text-green-700' : 'text-red-600') : 'text-gray-800'}`}>
-                          {v != null ? (key === 'residual_mean' ? ((v as number) >= 0 ? '+' : '') + (v as number).toFixed(2) : (v as number).toFixed(3)) : '—'}
+                        <div className={`text-sm font-bold ${textCls}`}>
+                          {v != null ? fmt(v as number) : '—'}
                         </div>
                       </div>
                     );
